@@ -11,6 +11,7 @@ const gestureEl = document.getElementById("gesture-readout");
 const statusEl = document.getElementById("lab-status");
 const coachEl = document.getElementById("coach-message");
 const labCanvas = document.getElementById("lab-canvas");
+const handsOverlay = document.getElementById("hands-overlay");
 const resetBtn = document.getElementById("reset-btn");
 const challengeBtn = document.getElementById("challenge-btn");
 
@@ -57,6 +58,8 @@ let gestureModelReady = false;
 let faceLandmarker = null;
 let faceModelReady = false;
 let lastFaceTime = -1;
+let currentHandLandmarks = null;
+let overlayCtx = null;
 
 const filesetResolverPromise = FilesetResolver.forVisionTasks(
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
@@ -181,10 +184,12 @@ function handleGestureResult(result) {
     );
     gestures.handPresent = false;
     palmFilter.ready = false;
+    currentHandLandmarks = null;
     return;
   }
 
   const landmarks = result.landmarks[0];
+  currentHandLandmarks = landmarks;
   const wrist = landmarks?.[0];
 
   if (wrist && Number.isFinite(wrist.x) && Number.isFinite(wrist.y)) {
@@ -281,12 +286,153 @@ function detectFaceGestures(landmarks) {
   }
 }
 
+function drawHandOverlay() {
+  if (!overlayCtx || !currentHandLandmarks) {
+    if (overlayCtx) {
+      overlayCtx.clearRect(0, 0, handsOverlay.width, handsOverlay.height);
+    }
+    return;
+  }
+
+  const ctx = overlayCtx;
+  const landmarks = currentHandLandmarks;
+  const width = handsOverlay.width;
+  const height = handsOverlay.height;
+
+  ctx.clearRect(0, 0, width, height);
+
+  // Determinar color según gesto
+  let baseColor = "#00d4ff"; // Azul por defecto
+  let glowColor = "#00a8cc";
+  
+  if (gestures.openHand) {
+    baseColor = "#00ff88";
+    glowColor = "#00cc6a";
+  } else if (gestures.fist) {
+    baseColor = "#ff6b6b";
+    glowColor = "#cc5555";
+  } else if (gestures.pointer) {
+    baseColor = "#ffd93d";
+    glowColor = "#ccb030";
+  }
+
+  // Conexiones de la mano (estructura tipo Kinect)
+  const connections = [
+    [0, 1], [1, 2], [2, 3], [3, 4], // Pulgar
+    [0, 5], [5, 6], [6, 7], [7, 8], // Índice
+    [0, 9], [9, 10], [10, 11], [11, 12], // Medio
+    [0, 13], [13, 14], [14, 15], [15, 16], // Anular
+    [0, 17], [17, 18], [18, 19], [19, 20], // Meñique
+    [5, 9], [9, 13], [13, 17], // Base de dedos
+  ];
+
+  // Dibujar conexiones con efecto de profundidad
+  ctx.strokeStyle = baseColor;
+  ctx.lineWidth = 2.5;
+  ctx.shadowBlur = 8;
+  ctx.shadowColor = glowColor;
+  
+  connections.forEach(([start, end]) => {
+    const startPoint = landmarks[start];
+    const endPoint = landmarks[end];
+    if (startPoint && endPoint) {
+      ctx.beginPath();
+      ctx.moveTo(startPoint.x * width, startPoint.y * height);
+      ctx.lineTo(endPoint.x * width, endPoint.y * height);
+      ctx.stroke();
+    }
+  });
+
+  // Dibujar puntos con efecto de relieve
+  landmarks.forEach((point, index) => {
+    if (!point) return;
+    
+    const x = point.x * width;
+    const y = point.y * height;
+    const z = point.z || 0;
+    
+    // Tamaño del punto según importancia (puntas de dedos más grandes)
+    const isTip = [4, 8, 12, 16, 20].includes(index);
+    const isWrist = index === 0;
+    const radius = isTip ? 8 : isWrist ? 10 : 5;
+    
+    // Efecto de profundidad (z más negativo = más cerca)
+    const depth = Math.max(0, 1 + z * 2);
+    const pointRadius = radius * depth;
+    
+    // Sombra para efecto 3D
+    ctx.fillStyle = "#000000";
+    ctx.globalAlpha = 0.3;
+    ctx.beginPath();
+    ctx.arc(x + 2, y + 2, pointRadius * 0.8, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Punto principal con gradiente
+    ctx.globalAlpha = 1;
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, pointRadius);
+    gradient.addColorStop(0, baseColor);
+    gradient.addColorStop(0.5, glowColor);
+    gradient.addColorStop(1, baseColor + "80");
+    
+    ctx.fillStyle = gradient;
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = glowColor;
+    ctx.beginPath();
+    ctx.arc(x, y, pointRadius, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Borde brillante
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.5;
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(x, y, pointRadius, 0, Math.PI * 2);
+    ctx.stroke();
+  });
+
+  // Resaltar punta del índice si está en modo puntero
+  if (gestures.pointer && landmarks[8]) {
+    const indexTip = landmarks[8];
+    const x = indexTip.x * width;
+    const y = indexTip.y * height;
+    
+    // Aura pulsante
+    const pulse = Math.sin(Date.now() / 200) * 0.3 + 0.7;
+    ctx.strokeStyle = "#ffd93d";
+    ctx.lineWidth = 3;
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = "#ffd93d";
+    ctx.globalAlpha = pulse;
+    ctx.beginPath();
+    ctx.arc(x, y, 25 * pulse, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function initOverlayCanvas() {
+  if (!handsOverlay) return;
+  
+  overlayCtx = handsOverlay.getContext("2d");
+  
+  function resizeOverlay() {
+    const rect = videoEl.getBoundingClientRect();
+    handsOverlay.width = rect.width;
+    handsOverlay.height = rect.height;
+  }
+  
+  videoEl.addEventListener("loadedmetadata", resizeOverlay);
+  window.addEventListener("resize", resizeOverlay);
+  resizeOverlay();
+}
+
 function loop(timestamp) {
   const palmPayload = gestures.handPresent ? { ...palm } : null;
   scene.updatePointer(palmPayload);
   updateGestureDisplay();
   stateMachine.update({ ...gestures, palm: palmPayload }, timestamp);
   scene.draw();
+  drawHandOverlay();
   requestAnimationFrame(loop);
 }
 
@@ -344,6 +490,7 @@ async function initCamera() {
 
 async function bootstrap() {
   try {
+    initOverlayCanvas();
     const filesetResolver = await filesetResolverPromise;
     await Promise.all([
       initGestureRecognizer(filesetResolver),

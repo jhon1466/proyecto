@@ -20,8 +20,10 @@
     <main>
       <section class="panel video-panel">
         <h2>Feed de cámara y gestos</h2>
-        <video id="input-video" playsinline></video>
-        <canvas id="hands-canvas"></canvas>
+        <div class="video-container">
+          <video id="input-video" playsinline></video>
+          <canvas id="hands-overlay"></canvas>
+        </div>
         <div class="gesture-readout" id="gesture-readout">Gestos: —</div>
       </section>
 
