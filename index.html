@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Laboratorio Gestual Interactivo</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>Laboratorio Gestual Interactivo · Módulo Circuitos</h1>
+      <p>
+        Controla el laboratorio con gestos: toma componentes con la mano, gira cables con el dedo, guiña para accionar el interruptor y sonríe para lanzar la simulación.
+      </p>
+    </header>
+
+    <main>
+      <section class="panel video-panel">
+        <h2>Feed de cámara y gestos</h2>
+        <video id="input-video" playsinline></video>
+        <canvas id="hands-canvas"></canvas>
+        <div class="gesture-readout" id="gesture-readout">Gestos: —</div>
+      </section>
+
+      <section class="panel lab-panel">
+        <h2>Mesa de circuitos</h2>
+        <canvas id="lab-canvas" width="640" height="360"></canvas>
+        <div class="lab-controls">
+          <button id="reset-btn">Reiniciar montaje</button>
+          <button id="challenge-btn">Desafío paralelo</button>
+        </div>
+        <div class="status" id="lab-status">Estado: esperando interacción</div>
+      </section>
+
+      <section class="panel tutor-panel">
+        <h2>Coach virtual</h2>
+        <p id="coach-message">Hola, soy Aster. Si ves chispas o algo no enciende, guiña y pregúntame.</p>
+        <ul>
+          <li>Mano abierta → tomar componente</li>
+          <li>Puño → soltar</li>
+          <li>Índice apuntando → rotar</li>
+          <li>Guiño derecho → interruptor</li>
+          <li>Sonrisa → validar circuito</li>
+        </ul>
+      </section>
+    </main>
+
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
+

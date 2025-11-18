@@ -1,0 +1,18 @@
+{
+  "name": "proyecto",
+  "version": "1.0.0",
+  "description": "Prototipo educativo que usa gestos de manos y expresiones faciales para controlar experimentos de ciencias dentro de un laboratorio virtual. El primer módulo se centra en circuitos eléctricos básicos: el estudiante arma un circuito, enciende un interruptor y recibe retroalimentación adaptativa según sus gestos y emociones.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "live-server": "^1.2.2"
+  }
+}
