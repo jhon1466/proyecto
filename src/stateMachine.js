@@ -7,6 +7,10 @@ export class GestureStateMachine {
     this.onAction = onAction;
     this.currentSelection = null;
     this.latestGestures = {};
+    this.rotationStartHandAngle = null;
+    this.rotationStartComponentAngle = null;
+    this.lastRotationAngle = null;
+    this.rotationSensitivity = 2.5; // Multiplicador de sensibilidad
   }
 
   update(gestures, timestamp = performance.now()) {
@@ -26,20 +30,18 @@ export class GestureStateMachine {
         break;
     }
 
-    if (gestures.smile) this.onAction("evaluate", { palm: gestures.palm });
-    if (gestures.wink) this.onAction("toggleSwitch", { palm: gestures.palm });
-    if (gestures.frown) this.onAction("assist", { palm: gestures.palm });
   }
 
   handleIdle(gestures) {
-    if (gestures.openHand) {
+    // Puño para agarrar (como agarrar un objeto)
+    if (gestures.fist) {
       this.state = "dragging";
       this.currentSelection = this.onAction("select", { palm: gestures.palm });
     }
   }
 
   handleDragging(gestures) {
-    if (!gestures.openHand && !gestures.pointer && !gestures.fist) {
+    if (!gestures.fist && !gestures.pointer && !gestures.openHand) {
       // No gesto válido → timeout a idle
       if (performance.now() - this.lastGestureAt > GESTURE_TIMEOUT) {
         this.state = "idle";
@@ -49,19 +51,31 @@ export class GestureStateMachine {
 
     if (gestures.pointer) {
       this.state = "rotating";
-      this.onAction("rotateStart", {
+      const currentHandAngle = gestures.angle ?? 0;
+      // Obtener el ángulo inicial del componente
+      const componentInfo = this.onAction("rotateStart", {
+        selectionId: this.currentSelection,
+        palm: gestures.palm,
+        handAngle: currentHandAngle,
+      });
+      // Guardar el ángulo inicial de la mano y del componente
+      this.rotationStartHandAngle = currentHandAngle;
+      this.rotationStartComponentAngle = componentInfo?.componentAngle ?? 0;
+      this.lastRotationAngle = currentHandAngle;
+      return;
+    }
+
+    // Mantener agarrado con puño
+    if (gestures.fist) {
+      this.onAction("drag", {
         selectionId: this.currentSelection,
         palm: gestures.palm,
       });
       return;
     }
 
-    this.onAction("drag", {
-      selectionId: this.currentSelection,
-      palm: gestures.palm,
-    });
-
-    if (gestures.fist) {
+    // Mano abierta para soltar (como soltar un objeto)
+    if (gestures.openHand) {
       this.onAction("drop", { selectionId: this.currentSelection });
       this.currentSelection = null;
       this.state = "idle";
@@ -70,21 +84,59 @@ export class GestureStateMachine {
 
   handleRotating(gestures) {
     if (gestures.pointer) {
-      this.onAction("rotate", {
-        selectionId: this.currentSelection,
-        angle: gestures.angle ?? 0,
-        palm: gestures.palm,
-      });
+      const currentHandAngle = gestures.angle ?? 0;
+      
+      // Calcular cambio relativo desde el ángulo inicial de la mano
+      if (this.lastRotationAngle !== null && 
+          this.rotationStartHandAngle !== null && 
+          this.rotationStartComponentAngle !== null) {
+        // Calcular cuánto ha cambiado la mano desde el último frame
+        let handDelta = currentHandAngle - this.lastRotationAngle;
+        
+        // Normalizar delta para manejar el cruce de 180/-180
+        if (handDelta > 180) handDelta -= 360;
+        if (handDelta < -180) handDelta += 360;
+        
+        // Aplicar sensibilidad al cambio
+        const scaledDelta = handDelta * this.rotationSensitivity;
+        
+        // Obtener el ángulo actual del componente y sumar el cambio
+        const componentInfo = this.onAction("getCurrentAngle", {
+          selectionId: this.currentSelection,
+        });
+        const currentComponentAngle = componentInfo?.angle ?? this.rotationStartComponentAngle;
+        
+        // Calcular nuevo ángulo del componente
+        let newComponentAngle = currentComponentAngle + scaledDelta;
+        newComponentAngle = ((newComponentAngle % 360) + 360) % 360;
+        
+        this.onAction("rotate", {
+          selectionId: this.currentSelection,
+          angle: newComponentAngle,
+          deltaAngle: scaledDelta,
+          palm: gestures.palm,
+        });
+      }
+      
+      this.lastRotationAngle = currentHandAngle;
       return;
     }
 
-    if (gestures.openHand) {
+    // Volver a arrastrar con puño
+    if (gestures.fist) {
       this.state = "dragging";
+      this.rotationStartHandAngle = null;
+      this.rotationStartComponentAngle = null;
+      this.lastRotationAngle = null;
       this.onAction("rotateEnd", { selectionId: this.currentSelection });
       return;
     }
 
-    if (gestures.fist) {
+    // Soltar con mano abierta
+    if (gestures.openHand) {
+      this.rotationStartHandAngle = null;
+      this.rotationStartComponentAngle = null;
+      this.lastRotationAngle = null;
       this.onAction("rotateEnd", { selectionId: this.currentSelection });
       this.onAction("drop", { selectionId: this.currentSelection });
       this.currentSelection = null;

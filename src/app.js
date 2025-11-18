@@ -3,7 +3,6 @@ import { LabScene } from "./scene.js";
 import {
   FilesetResolver,
   GestureRecognizer,
-  FaceLandmarker,
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
 const videoEl = document.getElementById("input-video");
@@ -21,9 +20,6 @@ const gestures = {
   openHand: false,
   fist: false,
   pointer: false,
-  wink: false,
-  smile: false,
-  frown: false,
   handPresent: false,
   angle: 0,
 };
@@ -32,18 +28,12 @@ const gestureLatches = {
   openHand: createLatch(4, 5),
   fist: createLatch(3, 4),
   pointer: createLatch(4, 4),
-  wink: createLatch(3, 3),
-  smile: createLatch(3, 4),
-  frown: createLatch(8, 5),
 };
 
 const gestureLabels = {
   openHand: "mano abierta",
   fist: "puño",
   pointer: "puntero",
-  wink: "guiño",
-  smile: "sonrisa",
-  frown: "ceño",
 };
 
 const gestureCategoryMap = {
@@ -55,9 +45,6 @@ const gestureCategoryMap = {
 let gestureRecognizer = null;
 let lastVideoTime = -1;
 let gestureModelReady = false;
-let faceLandmarker = null;
-let faceModelReady = false;
-let lastFaceTime = -1;
 let currentHandLandmarks = null;
 let overlayCtx = null;
 
@@ -76,20 +63,13 @@ const stateMachine = new GestureStateMachine((action, payload = {}) => {
       scene.dropSelected();
       break;
     case "rotateStart":
-      break;
+      return scene.getSelectedAngle();
+    case "getCurrentAngle":
+      return scene.getSelectedAngle();
     case "rotate":
-      scene.rotateSelected(payload.angle ?? 0);
+      scene.rotateSelected(payload.angle ?? 0, payload.deltaAngle);
       break;
     case "rotateEnd":
-      break;
-    case "toggleSwitch":
-      scene.toggleSwitch();
-      break;
-    case "evaluate":
-      scene.evaluate(true);
-      break;
-    case "assist":
-      scene.requestAssistance();
       break;
     default:
       break;
@@ -205,18 +185,71 @@ function handleGestureResult(result) {
   const fistScore = getGestureScore(categories, gestureCategoryMap.fist);
   const pointerScore = getGestureScore(categories, gestureCategoryMap.pointer);
 
-  setLatchedGesture("openHand", openScore > 0.55);
-  setLatchedGesture("fist", fistScore > 0.55);
-  setLatchedGesture("pointer", pointerScore > 0.45 && fistScore < 0.4);
-
-  const indexTip = landmarks?.[8];
-  if (indexTip) {
-    const angleRad = Math.atan2(
-      indexTip.y - wrist.y,
-      indexTip.x - wrist.x
-    );
-    gestures.angle = (angleRad * 180) / Math.PI;
+  // Detección mejorada de puntero usando geometría de la mano
+  let isPointerGeometric = false;
+  let pointerAngle = gestures.angle; // Mantener último ángulo si no hay puntero
+  
+  if (landmarks && landmarks.length >= 21) {
+    // Puntos clave del índice
+    const indexMCP = landmarks[5];  // Base del índice
+    const indexPIP = landmarks[6];  // Articulación media
+    const indexDIP = landmarks[7];  // Articulación distal
+    const indexTip = landmarks[8];   // Punta del índice
+    
+    // Puntos de otros dedos para validar que estén recogidos
+    const middleTip = landmarks[12];
+    const ringTip = landmarks[16];
+    const pinkyTip = landmarks[20];
+    const thumbTip = landmarks[4];
+    
+    if (indexMCP && indexPIP && indexDIP && indexTip && wrist) {
+      // Calcular distancias desde la muñeca
+      const distIndexTip = Math.hypot(indexTip.x - wrist.x, indexTip.y - wrist.y);
+      const distIndexMCP = Math.hypot(indexMCP.x - wrist.x, indexMCP.y - wrist.y);
+      const distMiddleTip = middleTip ? Math.hypot(middleTip.x - wrist.x, middleTip.y - wrist.y) : 0;
+      const distRingTip = ringTip ? Math.hypot(ringTip.x - wrist.x, ringTip.y - wrist.y) : 0;
+      const distPinkyTip = pinkyTip ? Math.hypot(pinkyTip.x - wrist.x, pinkyTip.y - wrist.y) : 0;
+      const distThumbTip = thumbTip ? Math.hypot(thumbTip.x - wrist.x, thumbTip.y - wrist.y) : 0;
+      
+      // Validar que el índice esté extendido (punta más lejos que la base)
+      const indexExtended = distIndexTip > distIndexMCP * 1.3;
+      
+      // Validar que otros dedos estén recogidos (más cerca que el índice)
+      const otherFingersRetracted = 
+        (!middleTip || distMiddleTip < distIndexTip * 0.85) &&
+        (!ringTip || distRingTip < distIndexTip * 0.85) &&
+        (!pinkyTip || distPinkyTip < distIndexTip * 0.85);
+      
+      // El pulgar puede estar en cualquier posición
+      const thumbOK = !thumbTip || distThumbTip < distIndexTip * 1.2;
+      
+      // Validar que las articulaciones del índice formen una línea (dedo extendido)
+      const indexStraight = 
+        Math.hypot(indexPIP.x - indexMCP.x, indexPIP.y - indexMCP.y) <
+        Math.hypot(indexTip.x - indexPIP.x, indexTip.y - indexPIP.y) * 1.5;
+      
+      isPointerGeometric = indexExtended && otherFingersRetracted && thumbOK && indexStraight;
+      
+      if (isPointerGeometric) {
+        // Calcular ángulo con mayor sensibilidad
+        const angleRad = Math.atan2(
+          indexTip.y - wrist.y,
+          indexTip.x - wrist.x
+        );
+        pointerAngle = (angleRad * 180) / Math.PI;
+      }
+    }
   }
+  
+  // Combinar detección de MediaPipe con validación geométrica
+  // Ser más permisivo: aceptar si MediaPipe dice puntero O si la geometría lo confirma
+  const isPointer = (pointerScore > 0.3 || isPointerGeometric) && fistScore < 0.5 && openScore < 0.5;
+  
+  setLatchedGesture("openHand", openScore > 0.55 && !isPointer);
+  setLatchedGesture("fist", fistScore > 0.55 && !isPointer);
+  setLatchedGesture("pointer", isPointer);
+  
+  gestures.angle = pointerAngle;
 }
 
 function processGestureFrame(timestampMs) {
@@ -228,63 +261,6 @@ function processGestureFrame(timestampMs) {
   handleGestureResult(result);
 }
 
-function processFaceFrame(timestampMs) {
-  if (!faceLandmarker || !faceModelReady) return;
-  if (lastFaceTime === videoEl.currentTime) return;
-  lastFaceTime = videoEl.currentTime;
-
-  const result = faceLandmarker.detectForVideo(videoEl, timestampMs);
-  detectFaceGestures(result?.faceLandmarks);
-}
-
-function detectFaceGestures(landmarks) {
-  if (!landmarks?.length) {
-    ["wink", "smile", "frown"].forEach((key) =>
-      setLatchedGesture(key, false)
-    );
-    return;
-  }
-  const face = landmarks[0];
-  
-  // Validar landmarks críticos
-  if (!face[159] || !face[145] || !face[386] || !face[374]) {
-    setLatchedGesture("wink", false);
-  } else {
-    const leftEyeHeight = Math.abs(face[159].y - face[145].y);
-    const rightEyeHeight = Math.abs(face[386].y - face[374].y);
-    const eyeRatio = Math.min(leftEyeHeight, rightEyeHeight) / Math.max(leftEyeHeight, rightEyeHeight);
-    
-    // Guiño: un ojo mucho más cerrado que el otro, pero no ambos cerrados
-    const bothEyesOpen = leftEyeHeight > 0.01 && rightEyeHeight > 0.01;
-    const rawWink = eyeRatio < 0.4 && bothEyesOpen && 
-                    (rightEyeHeight / leftEyeHeight < 0.4 || leftEyeHeight / rightEyeHeight < 0.4);
-    setLatchedGesture("wink", rawWink);
-  }
-
-  // Sonrisa mejorada
-  if (!face[61] || !face[291] || !face[13] || !face[14]) {
-    setLatchedGesture("smile", false);
-  } else {
-    const mouthWide = Math.abs(face[61].x - face[291].x);
-    const mouthTall = Math.abs(face[13].y - face[14].y);
-    
-    // Validar que la boca esté abierta lo suficiente para evitar falsos positivos
-    const mouthOpen = mouthTall > 0.005;
-    const rawSmile = mouthWide / (mouthTall || 0.001) > 1.6 && mouthOpen;
-    setLatchedGesture("smile", rawSmile);
-  }
-
-  // Ceño mejorado
-  if (!face[70] || !face[105]) {
-    setLatchedGesture("frown", false);
-  } else {
-    const browAngle = Math.abs(face[70].y - face[105].y);
-    // Validar que ambas cejas estén presentes
-    const browHeight = (Math.abs(face[70].y - face[159].y) + Math.abs(face[105].y - face[386].y)) / 2;
-    const rawFrown = browAngle < 0.015 && browHeight > 0.01;
-    setLatchedGesture("frown", rawFrown);
-  }
-}
 
 function drawHandOverlay() {
   if (!overlayCtx || !currentHandLandmarks) {
@@ -453,22 +429,6 @@ async function initGestureRecognizer(filesetResolver) {
   gestureModelReady = true;
 }
 
-async function initFaceLandmarker(filesetResolver) {
-  faceLandmarker = await FaceLandmarker.createFromOptions(
-    filesetResolver,
-    {
-      baseOptions: {
-        modelAssetPath:
-          "https://storage.googleapis.com/mediapipe-tasks/face_landmarker/face_landmarker.task",
-      },
-      runningMode: "VIDEO",
-      numFaces: 1,
-      outputFacialTransformationMatrixes: false,
-    }
-  );
-  faceModelReady = true;
-}
-
 async function initCamera() {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { width: 640, height: 360 },
@@ -480,7 +440,6 @@ async function initCamera() {
     onFrame: () => {
       const timestamp = performance.now();
       processGestureFrame(timestamp);
-      processFaceFrame(timestamp);
     },
     width: 640,
     height: 360,
@@ -492,10 +451,7 @@ async function bootstrap() {
   try {
     initOverlayCanvas();
     const filesetResolver = await filesetResolverPromise;
-    await Promise.all([
-      initGestureRecognizer(filesetResolver),
-      initFaceLandmarker(filesetResolver),
-    ]);
+    await initGestureRecognizer(filesetResolver);
     await initCamera();
   } catch (err) {
     statusEl.textContent = `No se pudo iniciar la cámara: ${err.message}`;

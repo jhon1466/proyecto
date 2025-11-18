@@ -1,5 +1,5 @@
 const COMPONENTS = [
-  { id: "battery", x: 100, y: 200, angle: 0 },
+  { id: "bateria", x: 100, y: 200, angle: 0 },
   { id: "bulb", x: 300, y: 150, angle: 0 },
   { id: "switch", x: 500, y: 220, angle: 0, closed: false },
   { id: "wireA", x: 200, y: 260, angle: 0 },
@@ -47,11 +47,22 @@ export class LabScene {
     this.selectedId = null;
   }
 
-  rotateSelected(angle) {
+  getSelectedAngle() {
+    if (!this.selectedId) return { componentAngle: 0, angle: 0 };
+    const comp = this.components.find((c) => c.id === this.selectedId);
+    return { componentAngle: comp?.angle ?? 0, angle: comp?.angle ?? 0 };
+  }
+
+  rotateSelected(angle, deltaAngle = null) {
     if (!this.selectedId) return;
     const comp = this.components.find((c) => c.id === this.selectedId);
-    comp.angle = angle;
-    this.setStatus(`Rotando ${comp.id}`);
+    
+    // Usar el ángulo calculado con sensibilidad aplicada
+    // Normalizar a rango 0-360
+    comp.angle = ((angle % 360) + 360) % 360;
+    
+    const angleDeg = Math.round(comp.angle);
+    this.setStatus(`Rotando ${comp.id} (${angleDeg}°)`);
   }
 
   toggleSwitch() {
