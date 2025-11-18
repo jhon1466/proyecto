@@ -8,12 +8,14 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <!-- Matter.js - Motor de física 2D avanzado -->
+    <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
   </head>
   <body>
     <header>
-      <h1>Laboratorio Gestual Interactivo · Módulo Circuitos</h1>
+      <h1>Laboratorio Gestual Interactivo · Lanzador de Física</h1>
       <p>
-        Controla el laboratorio con gestos: toma componentes con la mano, gira cables con el dedo, guiña para accionar el interruptor y sonríe para lanzar la simulación.
+        Lanza objetos con gestos y destruye los objetivos. Usa el puño para agarrar, mueve para apuntar y suelta para lanzar. ¡Física realista en acción!
       </p>
     </header>
 
@@ -28,22 +30,23 @@
       </section>
 
       <section class="panel lab-panel">
-        <h2>Mesa de circuitos</h2>
-        <canvas id="lab-canvas" width="640" height="360"></canvas>
+        <h2>Arena de Física</h2>
+        <canvas id="lab-canvas" width="960" height="720"></canvas>
         <div class="lab-controls">
-          <button id="reset-btn">Reiniciar montaje</button>
-          <button id="challenge-btn">Desafío paralelo</button>
+          <button id="reset-btn">Reiniciar juego</button>
         </div>
         <div class="status" id="lab-status">Estado: esperando interacción</div>
       </section>
 
       <section class="panel tutor-panel">
         <h2>Coach virtual</h2>
-        <p id="coach-message">Hola, soy Aster. Usa el puño para agarrar componentes y la mano abierta para soltarlos.</p>
+        <p id="coach-message">¡Hola! Usa el gesto de pellizcar (pulgar e índice juntos) para activar la resortera, estírala para cargar fuerza y suelta para lanzar. ¡Destruye todos los objetivos!</p>
         <ul>
-          <li>Puño → agarrar/mover componente</li>
-          <li>Mano abierta → soltar componente</li>
-          <li>Índice apuntando → rotar componente</li>
+          <li><strong>Pellizco</strong> (pulgar + índice) → activar resortera</li>
+          <li>Estira el pellizco → aumenta la fuerza</li>
+          <li>Mueve el pellizco → cambia la dirección</li>
+          <li>Suelta el pellizco → lanzar objeto</li>
+          <li>O usa puño → agarrar y lanzar tradicional</li>
         </ul>
       </section>
     </main>

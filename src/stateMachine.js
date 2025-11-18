@@ -26,6 +26,9 @@ export class GestureStateMachine {
       case "rotating":
         this.handleRotating(gestures);
         break;
+      case "slingshot":
+        this.handleSlingshot(gestures);
+        break;
       default:
         break;
     }
@@ -33,6 +36,17 @@ export class GestureStateMachine {
   }
 
   handleIdle(gestures) {
+    // Pellizco para activar resortera (prioridad sobre puño)
+    if (gestures.pinch && gestures.pinchPosition) {
+      this.state = "slingshot";
+      this.currentSelection = this.onAction("startSlingshot", {
+        pinchPosition: gestures.pinchPosition,
+        pinchDistance: gestures.pinchDistance,
+        angle: gestures.angle,
+      });
+      return;
+    }
+    
     // Puño para agarrar (como agarrar un objeto)
     if (gestures.fist) {
       this.state = "dragging";
@@ -41,6 +55,17 @@ export class GestureStateMachine {
   }
 
   handleDragging(gestures) {
+    // Pellizco tiene prioridad - cambiar a modo resortera
+    if (gestures.pinch && gestures.pinchPosition) {
+      this.state = "slingshot";
+      this.currentSelection = this.onAction("startSlingshot", {
+        pinchPosition: gestures.pinchPosition,
+        pinchDistance: gestures.pinchDistance,
+        angle: gestures.angle,
+      });
+      return;
+    }
+    
     if (!gestures.fist && !gestures.pointer && !gestures.openHand) {
       // No gesto válido → timeout a idle
       if (performance.now() - this.lastGestureAt > GESTURE_TIMEOUT) {
@@ -50,15 +75,25 @@ export class GestureStateMachine {
     }
 
     if (gestures.pointer) {
+      // Si estamos en modo launcher, usar puntero para ajustar trayectoria
+      if (this.currentSelection === "launcher") {
+        this.onAction("adjustTrajectory", {
+          selectionId: this.currentSelection,
+          angle: gestures.angle ?? 0,
+          indexDistance: gestures.indexDistance ?? null,
+          palm: gestures.palm,
+        });
+        return;
+      }
+      
+      // Para otros objetos, rotar normalmente
       this.state = "rotating";
       const currentHandAngle = gestures.angle ?? 0;
-      // Obtener el ángulo inicial del componente
       const componentInfo = this.onAction("rotateStart", {
         selectionId: this.currentSelection,
         palm: gestures.palm,
         handAngle: currentHandAngle,
       });
-      // Guardar el ángulo inicial de la mano y del componente
       this.rotationStartHandAngle = currentHandAngle;
       this.rotationStartComponentAngle = componentInfo?.componentAngle ?? 0;
       this.lastRotationAngle = currentHandAngle;
@@ -139,6 +174,28 @@ export class GestureStateMachine {
       this.lastRotationAngle = null;
       this.onAction("rotateEnd", { selectionId: this.currentSelection });
       this.onAction("drop", { selectionId: this.currentSelection });
+      this.currentSelection = null;
+      this.state = "idle";
+    }
+  }
+
+  handleSlingshot(gestures) {
+    // Actualizar resortera mientras hay pellizco
+    if (gestures.pinch && gestures.pinchPosition) {
+      this.onAction("updateSlingshot", {
+        selectionId: this.currentSelection,
+        pinchPosition: gestures.pinchPosition,
+        pinchDistance: gestures.pinchDistance,
+        angle: gestures.angle,
+      });
+      return;
+    }
+    
+    // Soltar pellizco = lanzar
+    if (!gestures.pinch) {
+      this.onAction("releaseSlingshot", {
+        selectionId: this.currentSelection,
+      });
       this.currentSelection = null;
       this.state = "idle";
     }
