@@ -3,7 +3,7 @@
 
 // Sistema de física simple para el juego de lanzamiento (fallback)
 class PhysicsObject {
-  constructor(x, y, radius, color, type = "ball") {
+  constructor(x, y, radius, color, type = "ball", canvasWidth = 960, canvasHeight = 720) {
     this.x = x;
     this.y = y;
     this.vx = 0;
@@ -16,6 +16,8 @@ class PhysicsObject {
     this.mass = radius * 0.1;
     this.active = true;
     this.trail = [];
+    this.canvasWidth = canvasWidth;
+    this.canvasHeight = canvasHeight;
   }
 
   update(dt) {
@@ -45,16 +47,16 @@ class PhysicsObject {
       this.x = this.radius;
       this.vx *= -0.7;
     }
-    if (this.x + this.radius > 640) {
-      this.x = 640 - this.radius;
+    if (this.x + this.radius > this.canvasWidth) {
+      this.x = this.canvasWidth - this.radius;
       this.vx *= -0.7;
     }
     if (this.y - this.radius < 0) {
       this.y = this.radius;
       this.vy *= -0.7;
     }
-    if (this.y + this.radius > 360) {
-      this.y = 360 - this.radius;
+    if (this.y + this.radius > this.canvasHeight) {
+      this.y = this.canvasHeight - this.radius;
       this.vy *= -0.5;
       this.vx *= 0.8;
       if (Math.abs(this.vy) < 50) {
@@ -64,7 +66,7 @@ class PhysicsObject {
     }
 
     // Desactivar si está muy quieto y abajo
-    if (this.y > 340 && Math.abs(this.vx) < 10 && Math.abs(this.vy) < 10) {
+    if (this.y > this.canvasHeight - 20 && Math.abs(this.vx) < 10 && Math.abs(this.vy) < 10) {
       this.active = false;
     }
   }
@@ -137,6 +139,8 @@ class Target {
   }
 
   draw(ctx) {
+    ctx.save();
+    
     if (this.hit) {
       ctx.globalAlpha = 0.3;
     }
@@ -152,7 +156,8 @@ class Target {
       ctx.textAlign = "center";
       ctx.fillText("🎯", this.x + this.width / 2, this.y + this.height / 2 + 6);
     }
-    ctx.globalAlpha = 1;
+    
+    ctx.restore();
   }
 }
 
@@ -388,7 +393,9 @@ export class LabScene {
             this.launchPosition.y,
             objConfig.radius,
             objConfig.color,
-            objConfig.type
+            objConfig.type,
+            this.canvas.width,
+            this.canvas.height
           );
           
           obj.vx = this.launchVelocity.x;
@@ -531,7 +538,9 @@ export class LabScene {
           this.slingshotBase.y,
           objConfig.radius,
           objConfig.color,
-          objConfig.type
+          objConfig.type,
+          this.canvas.width,
+          this.canvas.height
         );
         
         obj.vx = this.launchVelocity.x;

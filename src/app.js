@@ -29,18 +29,18 @@ const gestures = {
 };
 
 const gestureLatches = {
-  openHand: createLatch(6, 7), // Más frames para más estabilidad
-  fist: createLatch(5, 6),
-  pointer: createLatch(6, 6),
-  pinch: createLatch(5, 6), // Latch más robusto para pellizco
+  openHand: createLatch(4, 5), // Menos frames para más responsividad
+  fist: createLatch(4, 5),
+  pointer: createLatch(4, 5),
+  pinch: createLatch(3, 4), // Más responsivo para pellizco
 };
 
 // Filtros de suavizado temporal para gestos (reduce falsos positivos)
 const gestureSmoothers = {
-  openHand: { value: 0, target: 0, alpha: 0.12 }, // Más suave
-  fist: { value: 0, target: 0, alpha: 0.12 },
-  pointer: { value: 0, target: 0, alpha: 0.18 },
-  pinch: { value: 0, target: 0, alpha: 0.22 }, // Más rápido para pellizco
+  openHand: { value: 0, target: 0, alpha: 0.25 }, // Más responsivo
+  fist: { value: 0, target: 0, alpha: 0.25 },
+  pointer: { value: 0, target: 0, alpha: 0.3 },
+  pinch: { value: 0, target: 0, alpha: 0.35 }, // Más rápido para pellizco
 };
 
 // Historial de gestos para validación temporal
@@ -72,6 +72,14 @@ let gestureModelReady = false;
 let handLandmarkerReady = false;
 let currentHandLandmarks = null;
 let overlayCtx = null;
+
+// Optimización de rendimiento: throttling para dibujado
+let lastOverlayDraw = 0;
+const OVERLAY_DRAW_INTERVAL = 16; // ~60fps para overlay
+let lastGestureProcess = 0;
+const GESTURE_PROCESS_INTERVAL = 33; // ~30fps para procesamiento de gestos
+let lastGestureFrame = 0;
+const GESTURE_FRAME_INTERVAL = 33; // ~30fps para reconocimiento de gestos
 
 const filesetResolverPromise = FilesetResolver.forVisionTasks(
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm"
@@ -122,6 +130,21 @@ const palmFilter = {
   velocityY: 0,
   history: [] // Historial para filtro de mediana
 };
+
+// Sistema de calibración dinámica para mejorar precisión
+const calibration = {
+  minX: 0,
+  maxX: 1,
+  minY: 0,
+  maxY: 1,
+  calibrated: false,
+  samples: [],
+  maxSamples: 30 // Calibrar con 30 muestras
+};
+
+// Sistema de partículas para efectos visuales en las articulaciones
+const handParticles = [];
+const MAX_PARTICLES = 150; // Máximo de partículas simultáneas
 
 // Filtro para el ángulo del puntero
 const angleFilter = {
@@ -211,26 +234,66 @@ function medianFilter(values) {
 function smoothPalmCoords(x, y) {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   
-  // Mapeo mejorado: usar más área de la cámara
-  // x, y vienen normalizados (0-1) desde MediaPipe
-  // Factor de escala para cubrir más área vertical
-  const scaleX = 1.0; // Usar todo el ancho
-  const scaleY = 1.3; // Usar más altura para cubrir arriba y abajo
-  const offsetY = -0.1; // Offset para centrar mejor
+  // Sistema de calibración: recopilar muestras para determinar el rango real
+  if (!calibration.calibrated && calibration.samples.length < calibration.maxSamples) {
+    calibration.samples.push({ x, y });
+    if (calibration.samples.length === calibration.maxSamples) {
+      // Calcular rango real de movimiento
+      const xs = calibration.samples.map(s => s.x);
+      const ys = calibration.samples.map(s => s.y);
+      calibration.minX = Math.min(...xs);
+      calibration.maxX = Math.max(...xs);
+      calibration.minY = Math.min(...ys);
+      calibration.maxY = Math.max(...ys);
+      calibration.calibrated = true;
+      console.log('Calibración completada:', calibration);
+      if (statusEl) {
+        statusEl.textContent = "Calibración completada. ¡Listo para jugar!";
+      }
+    } else if (!calibration.calibrated && calibration.samples.length > 0) {
+      // Mostrar progreso de calibración
+      const progress = Math.round((calibration.samples.length / calibration.maxSamples) * 100);
+      if (progress % 10 === 0 && statusEl) { // Actualizar cada 10%
+        statusEl.textContent = `Calibrando... ${progress}% (mueve la mano por toda la pantalla)`;
+      }
+    }
+  }
   
-  // Mapear coordenadas normalizadas (0-1) al canvas
-  // Primero aplicar offset y escala
-  let normalizedX = x;
-  let normalizedY = (y + offsetY) * scaleY;
+  // Mapeo directo y proporcional: usar el mismo sistema que el overlay
+  // El overlay usa: point.x * width, point.y * height directamente
+  // Para el canvas del juego, necesitamos mapear proporcionalmente
   
-  // Normalizar Y de vuelta al rango 0-1 después del offset y escala
+  // Si está calibrado, usar el rango calibrado; si no, usar rango completo
+  let normalizedX, normalizedY;
+  
+  if (calibration.calibrated) {
+    // Mapear desde el rango calibrado al rango completo (0-1)
+    const rangeX = calibration.maxX - calibration.minX || 1;
+    const rangeY = calibration.maxY - calibration.minY || 1;
+    
+    // Normalizar al rango 0-1 basado en el rango calibrado
+    normalizedX = rangeX > 0.01 ? (x - calibration.minX) / rangeX : 0.5;
+    normalizedY = rangeY > 0.01 ? (y - calibration.minY) / rangeY : 0.5;
+    
+    // Expandir ligeramente para usar mejor el espacio (10% más)
+    normalizedX = (normalizedX - 0.5) * 1.1 + 0.5;
+    normalizedY = (normalizedY - 0.5) * 1.1 + 0.5;
+  } else {
+    // Mapeo directo sin calibración: usar coordenadas normalizadas directamente
+    // Esto hace que el cursor coincida exactamente con la posición en el overlay
+    normalizedX = x;
+    normalizedY = y;
+  }
+  
+  // Asegurar que esté en el rango 0-1
+  normalizedX = Math.max(0, Math.min(1, normalizedX));
   normalizedY = Math.max(0, Math.min(1, normalizedY));
   
-  // Mapear al tamaño del canvas
+  // Mapear al tamaño del canvas (igual que el overlay pero al canvas del juego)
   const mappedX = normalizedX * labCanvas.width;
   const mappedY = normalizedY * labCanvas.height;
   
-  // Invertir X para modo espejo
+  // Invertir X para modo espejo (igual que el video)
   const mirroredX = labCanvas.width - mappedX;
   
   // Limitar al área del canvas
@@ -363,7 +426,7 @@ function getGestureConsistency(gestureName, threshold = 0.7) {
 
 function handleGestureResult(result) {
   if (!result?.landmarks?.length) {
-    ["openHand", "fist", "pointer"].forEach((key) =>
+    ["openHand", "fist", "pointer", "pinch"].forEach((key) =>
       setLatchedGesture(key, false)
     );
     gestures.handPresent = false;
@@ -422,27 +485,28 @@ function handleGestureResult(result) {
       const distThumbTip = thumbTip ? Math.hypot(thumbTip.x - wrist.x, thumbTip.y - wrist.y) : 0;
       
       // Validar que el índice esté extendido (punta más lejos que la base)
-      // Más permisivo: 1.2 en lugar de 1.3
-      const indexExtended = distIndexTip > distIndexMCP * 1.2;
+      // Más permisivo: 1.15 para detectar mejor
+      const indexExtended = distIndexTip > distIndexMCP * 1.15;
       
       // Validar que otros dedos estén recogidos (más cerca que el índice)
-      // Más permisivo: 0.9 en lugar de 0.85
+      // Más permisivo: 0.95 para ser menos estricto
       const otherFingersRetracted = 
-        (!middleTip || distMiddleTip < distIndexTip * 0.9) &&
-        (!ringTip || distRingTip < distIndexTip * 0.9) &&
-        (!pinkyTip || distPinkyTip < distIndexTip * 0.9);
+        (!middleTip || distMiddleTip < distIndexTip * 0.95) &&
+        (!ringTip || distRingTip < distIndexTip * 0.95) &&
+        (!pinkyTip || distPinkyTip < distIndexTip * 0.95);
       
       // El pulgar puede estar en cualquier posición (más permisivo)
-      const thumbOK = !thumbTip || distThumbTip < distIndexTip * 1.3;
+      const thumbOK = !thumbTip || distThumbTip < distIndexTip * 1.4;
       
       // Validar que las articulaciones del índice formen una línea (dedo extendido)
-      // Más permisivo: 1.8 en lugar de 1.5
+      // Más permisivo: 2.0 para detectar mejor
       const indexStraight = 
         Math.hypot(indexPIP.x - indexMCP.x, indexPIP.y - indexMCP.y) <
-        Math.hypot(indexTip.x - indexPIP.x, indexTip.y - indexPIP.y) * 1.8;
+        Math.hypot(indexTip.x - indexPIP.x, indexTip.y - indexPIP.y) * 2.0;
       
       // Validación adicional: el índice debe estar más extendido que el medio
-      const indexMoreExtended = !middleTip || distIndexTip > distMiddleTip * 1.1;
+      // Más permisivo: 1.05
+      const indexMoreExtended = !middleTip || distIndexTip > distMiddleTip * 1.05;
       
       isPointerGeometric = indexExtended && otherFingersRetracted && thumbOK && indexStraight && indexMoreExtended;
       
@@ -474,7 +538,7 @@ function handleGestureResult(result) {
       
       // Umbral adaptativo basado en el tamaño de la mano
       const handSize = Math.max(distThumbTip, distIndexTip);
-      const pinchThreshold = Math.max(0.025, handSize * 0.18); // 18% del tamaño de la mano, mínimo 0.025 (más permisivo)
+      const pinchThreshold = Math.max(0.03, handSize * 0.2); // 20% del tamaño de la mano, mínimo 0.03 (más permisivo)
       
       // Validar que el pulgar y el índice estén realmente juntos
       // No solo cerca, sino en posición de pellizco (ambos dedos extendidos hacia el centro)
@@ -513,7 +577,8 @@ function handleGestureResult(result) {
           const indexDot = (indexDirection.x * -thumbToIndex.x + indexDirection.y * -thumbToIndex.y) / (indexDirLen * thumbToIndexLen);
           
           // Ambos dedos deben apuntar hacia el otro (producto punto positivo)
-          fingersPointingTogether = thumbDot > 0.3 && indexDot > 0.3;
+          // Más permisivo: 0.2 en lugar de 0.3
+          fingersPointingTogether = thumbDot > 0.2 && indexDot > 0.2;
         }
       }
       
@@ -656,6 +721,12 @@ function handleGestureResult(result) {
 function processGestureFrame(timestampMs) {
   if (!gestureRecognizer || !gestureModelReady) return;
   if (lastVideoTime === videoEl.currentTime) return;
+  
+  // Throttling adicional: procesar gestos a ~30fps en vez de cada frame de video
+  const now = performance.now();
+  if (now - lastGestureFrame < GESTURE_FRAME_INTERVAL) return;
+  lastGestureFrame = now;
+  
   lastVideoTime = videoEl.currentTime;
 
   const result = gestureRecognizer.recognizeForVideo(videoEl, timestampMs);
@@ -663,20 +734,157 @@ function processGestureFrame(timestampMs) {
 }
 
 
-function drawHandOverlay() {
-  if (!overlayCtx || !currentHandLandmarks) {
-    if (overlayCtx) {
-      overlayCtx.clearRect(0, 0, handsOverlay.width, handsOverlay.height);
+// Función para crear partículas en las articulaciones con efecto bloom
+function createHandParticles(landmarks, width, height, baseColor, glowColor) {
+  if (!landmarks || landmarks.length < 21) return;
+  
+  // Articulaciones importantes donde generar partículas
+  const importantJoints = [0, 4, 8, 12, 16, 20]; // Muñeca y puntas de dedos
+  
+  importantJoints.forEach(index => {
+    const point = landmarks[index];
+    if (!point) return;
+    
+    const x = point.x * width;
+    const y = point.y * height;
+    
+    // Generar partículas según importancia
+    const particleCount = index === 0 ? 3 : 2; // Más partículas en la muñeca
+    
+    for (let i = 0; i < particleCount; i++) {
+      if (handParticles.length >= MAX_PARTICLES) break;
+      
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 0.3 + Math.random() * 1.0;
+      const size = 3 + Math.random() * 5;
+      
+      handParticles.push({
+        x: x + (Math.random() - 0.5) * 8,
+        y: y + (Math.random() - 0.5) * 8,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        size: size,
+        life: 1.0,
+        decay: 0.02 + Math.random() * 0.015, // Tiempo de vida más corto
+        color: baseColor, // Color exacto del gesto
+        glowColor: glowColor, // Color de brillo del gesto
+        rotation: Math.random() * Math.PI * 2,
+        rotationSpeed: (Math.random() - 0.5) * 0.15
+      });
     }
+  });
+}
+
+// Actualizar partículas
+function updateHandParticles() {
+  for (let i = handParticles.length - 1; i >= 0; i--) {
+    const p = handParticles[i];
+    
+    // Actualizar posición
+    p.x += p.vx;
+    p.y += p.vy;
+    
+    // Aplicar gravedad muy suave
+    p.vy += 0.03;
+    
+    // Fricción más fuerte para que se desvanezcan más rápido
+    p.vx *= 0.96;
+    p.vy *= 0.96;
+    
+    // Rotación
+    p.rotation += p.rotationSpeed;
+    
+    // Reducir vida
+    p.life -= p.decay;
+    
+    // Reducir tamaño mientras se desvanece
+    p.size *= 0.98;
+    
+    // Eliminar partículas muertas o fuera de pantalla
+    if (p.life <= 0 || p.size < 0.5 || p.y > handsOverlay.height + 50) {
+      handParticles.splice(i, 1);
+    }
+  }
+}
+
+// Dibujar partículas con efecto bloom
+function drawHandParticles(ctx) {
+  handParticles.forEach(p => {
+    ctx.save();
+    
+    // Efecto bloom: múltiples capas de brillo
+    const bloomSize = p.size * 3; // Tamaño del bloom (3x el tamaño de la partícula)
+    const alpha = p.life;
+    
+    // Capa 1: Bloom exterior (más grande, más transparente)
+    ctx.globalAlpha = alpha * 0.2;
+    const outerGradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, bloomSize);
+    outerGradient.addColorStop(0, p.glowColor);
+    outerGradient.addColorStop(0.3, p.color + "80");
+    outerGradient.addColorStop(1, p.color + "00");
+    ctx.fillStyle = outerGradient;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, bloomSize, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Capa 2: Bloom medio (intermedio)
+    ctx.globalAlpha = alpha * 0.4;
+    const midGradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size * 2);
+    midGradient.addColorStop(0, p.glowColor);
+    midGradient.addColorStop(0.5, p.color + "CC");
+    midGradient.addColorStop(1, p.color + "00");
+    ctx.fillStyle = midGradient;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * 2, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Capa 3: Núcleo brillante (partícula principal)
+    ctx.globalAlpha = alpha;
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rotation);
+    
+    // Núcleo con gradiente radial intenso
+    const coreGradient = ctx.createRadialGradient(0, 0, 0, 0, 0, p.size);
+    coreGradient.addColorStop(0, "#ffffff"); // Centro blanco brillante
+    coreGradient.addColorStop(0.3, p.glowColor); // Color de brillo
+    coreGradient.addColorStop(0.7, p.color); // Color del gesto
+    coreGradient.addColorStop(1, p.color + "CC");
+    
+    ctx.fillStyle = coreGradient;
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = p.glowColor;
+    ctx.beginPath();
+    ctx.arc(0, 0, p.size, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Punto central ultra brillante
+    ctx.fillStyle = "#ffffff";
+    ctx.globalAlpha = alpha * 0.8;
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(0, 0, p.size * 0.4, 0, Math.PI * 2);
+    ctx.fill();
+    
+    ctx.restore();
+  });
+}
+
+function drawHandOverlay() {
+  if (!overlayCtx) return;
+  
+  const ctx = overlayCtx;
+  const width = handsOverlay.width;
+  const height = handsOverlay.height;
+  
+  // Solo dibujar si hay landmarks, si no, limpiar y salir
+  if (!currentHandLandmarks) {
+    ctx.clearRect(0, 0, width, height);
+    // Limpiar partículas también
+    handParticles.length = 0;
     return;
   }
 
-  const ctx = overlayCtx;
   const landmarks = currentHandLandmarks;
-  const width = handsOverlay.width;
-  const height = handsOverlay.height;
-
-  ctx.clearRect(0, 0, width, height);
 
   // Determinar color según gesto
   let baseColor = "#00d4ff"; // Azul por defecto
@@ -695,6 +903,18 @@ function drawHandOverlay() {
     baseColor = "#ffd93d";
     glowColor = "#ccb030";
   }
+  
+  // Limpiar canvas completamente (sin fade para evitar ghosting)
+  ctx.clearRect(0, 0, width, height);
+  
+  // Crear nuevas partículas en las articulaciones
+  createHandParticles(landmarks, width, height, baseColor, glowColor);
+  
+  // Actualizar partículas existentes
+  updateHandParticles();
+  
+  // Dibujar partículas primero (debajo de las conexiones) con efecto bloom
+  drawHandParticles(ctx);
 
   // Conexiones de la mano (estructura tipo Kinect)
   const connections = [
@@ -834,6 +1054,47 @@ function drawHandOverlay() {
     ctx.globalAlpha = 1;
     ctx.shadowBlur = 0;
   }
+  
+  // Efecto adicional: estelas brillantes en las conexiones principales
+  const mainConnections = [
+    [0, 5], [5, 6], [6, 7], [7, 8], // Índice
+    [0, 9], [9, 10], [10, 11], [11, 12], // Medio
+    [0, 13], [13, 14], [14, 15], [15, 16], // Anular
+    [0, 17], [17, 18], [18, 19], [19, 20], // Meñique
+  ];
+  
+  ctx.save();
+  ctx.globalAlpha = 0.4;
+  ctx.strokeStyle = glowColor;
+  ctx.lineWidth = 2;
+  ctx.shadowBlur = 12;
+  ctx.shadowColor = glowColor;
+  
+  mainConnections.forEach(([start, end]) => {
+    const startPoint = landmarks[start];
+    const endPoint = landmarks[end];
+    if (startPoint && endPoint) {
+      const startX = startPoint.x * width;
+      const startY = startPoint.y * height;
+      const endX = endPoint.x * width;
+      const endY = endPoint.y * height;
+      
+      // Crear gradiente a lo largo de la línea para efecto de estela
+      const gradient = ctx.createLinearGradient(startX, startY, endX, endY);
+      gradient.addColorStop(0, baseColor + "00");
+      gradient.addColorStop(0.3, glowColor + "AA");
+      gradient.addColorStop(0.7, glowColor + "AA");
+      gradient.addColorStop(1, baseColor + "00");
+      
+      ctx.strokeStyle = gradient;
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+    }
+  });
+  
+  ctx.restore();
 }
 
 function initOverlayCanvas() {
@@ -855,10 +1116,23 @@ function initOverlayCanvas() {
 function loop(timestamp) {
   const palmPayload = gestures.handPresent ? { ...palm } : null;
   scene.updatePointer(palmPayload);
-  updateGestureDisplay();
-  stateMachine.update({ ...gestures, palm: palmPayload }, timestamp);
+  
+  // Throttling para procesamiento de gestos (30fps)
+  if (timestamp - lastGestureProcess >= GESTURE_PROCESS_INTERVAL) {
+    updateGestureDisplay();
+    stateMachine.update({ ...gestures, palm: palmPayload }, timestamp);
+    lastGestureProcess = timestamp;
+  }
+  
+  // Dibujar escena siempre (60fps para física fluida)
   scene.draw();
-  drawHandOverlay();
+  
+  // Throttling para overlay de manos (60fps pero optimizado)
+  if (timestamp - lastOverlayDraw >= OVERLAY_DRAW_INTERVAL) {
+    drawHandOverlay();
+    lastOverlayDraw = timestamp;
+  }
+  
   requestAnimationFrame(loop);
 }
 
@@ -877,9 +1151,9 @@ async function initGestureRecognizer(filesetResolver) {
         },
         runningMode: "VIDEO",
         numHands: 1,
-        minHandDetectionConfidence: 0.4, // Más bajo para detectar más fácilmente
-        minHandPresenceConfidence: 0.4,
-        minTrackingConfidence: 0.4,
+        minHandDetectionConfidence: 0.3, // Más bajo para detectar más fácilmente
+        minHandPresenceConfidence: 0.3,
+        minTrackingConfidence: 0.3,
       }
     );
     console.log("Gesture Recognizer inicializado con GPU");
@@ -1004,5 +1278,13 @@ async function bootstrap() {
 
 bootstrap();
 
-resetBtn.addEventListener("click", () => scene.reset());
+resetBtn.addEventListener("click", () => {
+  scene.reset();
+  // Recalibrar al resetear
+  calibration.calibrated = false;
+  calibration.samples = [];
+  if (statusEl) {
+    statusEl.textContent = "Mueve la mano por toda la pantalla para calibrar...";
+  }
+});
 

@@ -32,7 +32,7 @@ h1 {
 main {
   display: grid;
   gap: 1.5rem;
-  grid-template-columns: 1fr 2fr; /* Video más pequeño, escena más grande */
+  grid-template-columns: 1.3fr 1.7fr; /* Video más grande, mejor balance */
   grid-template-rows: auto auto;
 }
 
@@ -86,6 +86,11 @@ canvas {
   border-radius: 12px;
   border: 1px solid #223049;
   background: #050607;
+}
+
+#input-video {
+  min-height: 400px; /* Tamaño mínimo para el video */
+  object-fit: cover; /* Mantener proporción sin distorsión */
 }
 
 #lab-canvas {
