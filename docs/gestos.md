@@ -1,24 +1,26 @@
 ## Especificación de gestos y acciones
 
-El sistema usa **MediaPipe Gesture Recognizer**. Cada gesto se activa cuando el modelo reporta la categoría especificada con probabilidad alta; los valores se estabilizan con un latch temporal para evitar parpadeos.
+El sistema usa **MediaPipe Gesture Recognizer** + validaciones geométricas. Cada gesto pasa por filtros temporales y suavizados para reducir falsos positivos.
 
-| Gesto | Categorías (MediaPipe) | Acción principal | Notas |
+| Gesto | Categorías (MediaPipe) | Acción en la pizarra | Notas |
 | --- | --- | --- | --- |
-| Puño | `Closed_Fist` | Agarrar y mover componente | Como agarrar un objeto físico |
-| Mano abierta | `Open_Palm` | Soltar componente | Como soltar un objeto físico |
-| Índice apuntando | `Pointing_Up` | Rotar componentes | El ángulo sigue el vector muñeca→punta índice |
+| Índice apuntando | `Pointing_Up` + validaciones geométricas | Dibujar trazo continuo | Mantén el dedo extendido para dibujar; se suaviza la trayectoria |
+| Puño | `Closed_Fist` | Activar goma / borrar | El radio de la goma crece para borrar rápido |
+| Mano abierta | `Open_Palm` | Cambiar color o limpiar | Mano sobre la paleta por 250 ms cambia el color; mano abierta en el centro por 2 s limpia todo |
+| Mano detectada (sin gesto específico) | `Presence` | Controlar el puntero | El puntero sigue la palma suavizada |
 
 ## Máquina de estados (resumen)
 
-- **Idle** → espera gesto de puño para agarrar.
-- **Arrastrando** → puño activo; objeto sigue la palma mientras mantienes el puño.
-- **Rotar** → transición desde Arrastrando al detectar puntero (índice extendido).
-- **Soltar** → mano abierta suelta el componente; bloquea pieza en la mesa.
+- **Idle** → gestos utilitarios (cambiar color / limpiar) y espera de acciones principales.
+- **Drawing** → pellizco activo; se agregan puntos si hay movimiento significativo.
+- **Erasing** → puño activo; se generan trazos con modo `destination-out`.
+- Transiciones automáticas cuando se pierde cada gesto.
 
-## Umbrales iniciales sugeridos
+## Umbrales sugeridos
 
-- `UMBRAL_PUNIO = 0.55` (probabilidad mínima para agarrar)
-- `UMBRAL_MANO_ABIERTA = 0.55` (probabilidad mínima para soltar)
-- `UMBRAL_PUNTERO = 0.45` (probabilidad mínima para rotar)
+- `minHandDetectionConfidence = 0.5`
+- `minHandPresenceConfidence = 0.5`
+- `minTrackingConfidence = 0.5`
+- Latches de 4–5 frames para pellizco/puño y 3 frames para mano abierta.
 
-> Ajusta estos valores tras recopilar datos reales. Los latches temporales (3-5 frames) reducen ruido y falsos positivos.
+> Mantén buena iluminación y fondo contrastante para lograr punteros estables.

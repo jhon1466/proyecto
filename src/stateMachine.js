@@ -1,204 +1,125 @@
-const GESTURE_TIMEOUT = 120; // ms
+const COLOR_PICK_HOLD_MS = 250;
+const CLEAR_HOLD_MS = 1800;
 
 export class GestureStateMachine {
   constructor(onAction) {
     this.state = "idle";
-    this.lastGestureAt = 0;
     this.onAction = onAction;
-    this.currentSelection = null;
     this.latestGestures = {};
-    this.rotationStartHandAngle = null;
-    this.rotationStartComponentAngle = null;
-    this.lastRotationAngle = null;
-    this.rotationSensitivity = 2.5; // Multiplicador de sensibilidad
+    this.colorHoldStart = null;
+    this.openHandHoldStart = null;
+    this.clearTriggered = false;
   }
 
   update(gestures, timestamp = performance.now()) {
-    this.lastGestureAt = timestamp;
     this.latestGestures = gestures;
+    this.handleUtilityGestures(gestures, timestamp);
+
     switch (this.state) {
       case "idle":
         this.handleIdle(gestures);
         break;
-      case "dragging":
-        this.handleDragging(gestures);
+      case "drawing":
+        this.handleDrawing(gestures);
         break;
-      case "rotating":
-        this.handleRotating(gestures);
-        break;
-      case "slingshot":
-        this.handleSlingshot(gestures);
+      case "erasing":
+        this.handleErasing(gestures);
         break;
       default:
+        this.state = "idle";
         break;
     }
-
   }
 
   handleIdle(gestures) {
-    // Pellizco para activar resortera (prioridad sobre puño)
-    if (gestures.pinch && gestures.pinchPosition) {
-      this.state = "slingshot";
-      this.currentSelection = this.onAction("startSlingshot", {
-        pinchPosition: gestures.pinchPosition,
-        pinchDistance: gestures.pinchDistance,
-        angle: gestures.angle,
-      });
-      return;
-    }
-    
-    // Puño para agarrar (como agarrar un objeto)
-    if (gestures.fist) {
-      this.state = "dragging";
-      this.currentSelection = this.onAction("select", { palm: gestures.palm });
-    }
-  }
-
-  handleDragging(gestures) {
-    // Pellizco tiene prioridad - cambiar a modo resortera
-    if (gestures.pinch && gestures.pinchPosition) {
-      this.state = "slingshot";
-      this.currentSelection = this.onAction("startSlingshot", {
-        pinchPosition: gestures.pinchPosition,
-        pinchDistance: gestures.pinchDistance,
-        angle: gestures.angle,
-      });
-      return;
-    }
-    
-    if (!gestures.fist && !gestures.pointer && !gestures.openHand) {
-      // No gesto válido → timeout a idle
-      if (performance.now() - this.lastGestureAt > GESTURE_TIMEOUT) {
-        this.state = "idle";
-      }
+    if (!gestures?.palm) {
       return;
     }
 
     if (gestures.pointer) {
-      // Si estamos en modo launcher, usar puntero para ajustar trayectoria
-      if (this.currentSelection === "launcher") {
-        this.onAction("adjustTrajectory", {
-          selectionId: this.currentSelection,
-          angle: gestures.angle ?? 0,
-          indexDistance: gestures.indexDistance ?? null,
-          palm: gestures.palm,
-        });
-        return;
-      }
-      
-      // Para otros objetos, rotar normalmente
-      this.state = "rotating";
-      const currentHandAngle = gestures.angle ?? 0;
-      const componentInfo = this.onAction("rotateStart", {
-        selectionId: this.currentSelection,
-        palm: gestures.palm,
-        handAngle: currentHandAngle,
-      });
-      this.rotationStartHandAngle = currentHandAngle;
-      this.rotationStartComponentAngle = componentInfo?.componentAngle ?? 0;
-      this.lastRotationAngle = currentHandAngle;
+      this.state = "drawing";
+      this.onAction("startDrawing", { palm: gestures.palm });
       return;
     }
 
-    // Mantener agarrado con puño
     if (gestures.fist) {
-      this.onAction("drag", {
-        selectionId: this.currentSelection,
-        palm: gestures.palm,
-      });
-      return;
-    }
-
-    // Mano abierta para soltar (como soltar un objeto)
-    if (gestures.openHand) {
-      this.onAction("drop", { selectionId: this.currentSelection });
-      this.currentSelection = null;
-      this.state = "idle";
+      this.state = "erasing";
+      this.onAction("startErasing", { palm: gestures.palm });
     }
   }
 
-  handleRotating(gestures) {
-    if (gestures.pointer) {
-      const currentHandAngle = gestures.angle ?? 0;
-      
-      // Calcular cambio relativo desde el ángulo inicial de la mano
-      if (this.lastRotationAngle !== null && 
-          this.rotationStartHandAngle !== null && 
-          this.rotationStartComponentAngle !== null) {
-        // Calcular cuánto ha cambiado la mano desde el último frame
-        let handDelta = currentHandAngle - this.lastRotationAngle;
-        
-        // Normalizar delta para manejar el cruce de 180/-180
-        if (handDelta > 180) handDelta -= 360;
-        if (handDelta < -180) handDelta += 360;
-        
-        // Aplicar sensibilidad al cambio
-        const scaledDelta = handDelta * this.rotationSensitivity;
-        
-        // Obtener el ángulo actual del componente y sumar el cambio
-        const componentInfo = this.onAction("getCurrentAngle", {
-          selectionId: this.currentSelection,
-        });
-        const currentComponentAngle = componentInfo?.angle ?? this.rotationStartComponentAngle;
-        
-        // Calcular nuevo ángulo del componente
-        let newComponentAngle = currentComponentAngle + scaledDelta;
-        newComponentAngle = ((newComponentAngle % 360) + 360) % 360;
-        
-        this.onAction("rotate", {
-          selectionId: this.currentSelection,
-          angle: newComponentAngle,
-          deltaAngle: scaledDelta,
-          palm: gestures.palm,
-        });
+  handleDrawing(gestures) {
+    if (gestures.pointer && gestures.palm) {
+      this.onAction("continueDrawing", { palm: gestures.palm });
+      return;
+    }
+
+    this.onAction("endDrawing");
+    this.state = "idle";
+  }
+
+  handleErasing(gestures) {
+    if (gestures.fist && gestures.palm) {
+      this.onAction("continueErasing", { palm: gestures.palm });
+      return;
+    }
+
+    this.onAction("endErasing");
+    this.state = "idle";
+  }
+
+  handleUtilityGestures(gestures, timestamp) {
+    if (!gestures?.palm) {
+      this.resetHolds();
+      return;
+    }
+
+    if (this.state !== "idle") {
+      // No permitir acciones auxiliares mientras se dibuja o borra
+      this.resetHolds();
+      return;
+    }
+
+    if (!gestures.openHand) {
+      this.resetHolds();
+      return;
+    }
+
+    const inPalette = !!this.onAction("isPointerInPalette", {
+      palm: gestures.palm,
+    });
+
+    if (inPalette) {
+      if (this.colorHoldStart === null) {
+        this.colorHoldStart = timestamp;
       }
-      
-      this.lastRotationAngle = currentHandAngle;
+
+      if (timestamp - this.colorHoldStart >= COLOR_PICK_HOLD_MS) {
+        this.onAction("attemptColorPick", { palm: gestures.palm });
+        this.colorHoldStart = timestamp;
+      }
+
+      this.openHandHoldStart = null;
+      this.clearTriggered = false;
       return;
     }
 
-    // Volver a arrastrar con puño
-    if (gestures.fist) {
-      this.state = "dragging";
-      this.rotationStartHandAngle = null;
-      this.rotationStartComponentAngle = null;
-      this.lastRotationAngle = null;
-      this.onAction("rotateEnd", { selectionId: this.currentSelection });
-      return;
+    // Open hand fuera de la paleta = gesto de "limpiar"
+    if (this.openHandHoldStart === null) {
+      this.openHandHoldStart = timestamp;
+      this.clearTriggered = false;
     }
 
-    // Soltar con mano abierta
-    if (gestures.openHand) {
-      this.rotationStartHandAngle = null;
-      this.rotationStartComponentAngle = null;
-      this.lastRotationAngle = null;
-      this.onAction("rotateEnd", { selectionId: this.currentSelection });
-      this.onAction("drop", { selectionId: this.currentSelection });
-      this.currentSelection = null;
-      this.state = "idle";
+    const heldFor = timestamp - this.openHandHoldStart;
+    if (heldFor >= CLEAR_HOLD_MS && !this.clearTriggered) {
+      this.onAction("clearBoard");
+      this.clearTriggered = true;
     }
   }
 
-  handleSlingshot(gestures) {
-    // Actualizar resortera mientras hay pellizco
-    if (gestures.pinch && gestures.pinchPosition) {
-      this.onAction("updateSlingshot", {
-        selectionId: this.currentSelection,
-        pinchPosition: gestures.pinchPosition,
-        pinchDistance: gestures.pinchDistance,
-        angle: gestures.angle,
-      });
-      return;
-    }
-    
-    // Soltar pellizco = lanzar
-    if (!gestures.pinch) {
-      this.onAction("releaseSlingshot", {
-        selectionId: this.currentSelection,
-      });
-      this.currentSelection = null;
-      this.state = "idle";
-    }
+  resetHolds() {
+    this.colorHoldStart = null;
+    this.openHandHoldStart = null;
+    this.clearTriggered = false;
   }
 }
-

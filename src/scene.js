@@ -317,7 +317,23 @@ export class LabScene {
   }
 
   adjustTrajectory(angle, indexDistance, palm) {
-    if (!this.selectedId || this.selectedId !== "launcher" || !palm) return;
+    if (!this.selectedId || this.selectedId !== "launcher") return;
+    
+    // Actualizar posición de lanzamiento si hay palm
+    if (palm) {
+      this.launchPosition = { x: palm.x, y: palm.y };
+      if (this.lastPalmPos) {
+        const dx = palm.x - this.lastPalmPos.x;
+        const dy = palm.y - this.lastPalmPos.y;
+        const dt = 0.016; // ~60fps
+        
+        // Suavizar la velocidad (promedio móvil)
+        const smoothing = 0.5;
+        this.launchVelocity.x = this.launchVelocity.x * (1 - smoothing) + (dx / dt) * smoothing;
+        this.launchVelocity.y = this.launchVelocity.y * (1 - smoothing) + (dy / dt) * smoothing;
+      }
+      this.lastPalmPos = { x: palm.x, y: palm.y };
+    }
     
     // Usar el ángulo del índice para determinar la dirección
     const angleRad = (angle * Math.PI) / 180;
@@ -334,15 +350,12 @@ export class LabScene {
       const normalizedDist = Math.max(0, Math.min(1, (indexDistance - 0.1) / 0.2));
       force = minForce + (maxForce - minForce) * normalizedDist;
     } else {
-      // Si no hay distancia, usar fuerza base basada en movimiento
-      const baseForce = 800;
-      if (this.lastPalmPos && palm) {
-        const dx = palm.x - this.lastPalmPos.x;
-        const dy = palm.y - this.lastPalmPos.y;
-        const movementSpeed = Math.hypot(dx, dy) / 0.016;
-        force = Math.max(minForce, Math.min(maxForce, movementSpeed * 1.5 + baseForce * 0.5));
+      // Si no hay distancia, usar velocidad actual o fuerza base
+      const currentSpeed = Math.hypot(this.launchVelocity.x, this.launchVelocity.y);
+      if (currentSpeed > minForce) {
+        force = Math.max(minForce, Math.min(maxForce, currentSpeed));
       } else {
-        force = baseForce;
+        force = 800; // Fuerza base
       }
     }
     

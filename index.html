@@ -5,17 +5,33 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Laboratorio Gestual Interactivo</title>
     <link rel="stylesheet" href="./styles.css" />
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <!-- MediaPipe Camera Utils - debe cargarse antes del módulo principal -->
+    <script 
+      src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" 
+      crossorigin="anonymous"
+      onerror="console.error('Error cargando camera_utils.js')"
+      onload="console.log('camera_utils.js cargado correctamente')"
+    ></script>
+    <script 
+      src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" 
+      crossorigin="anonymous"
+      onerror="console.error('Error cargando control_utils.js')"
+      onload="console.log('control_utils.js cargado correctamente')"
+    ></script>
+    <script 
+      src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" 
+      crossorigin="anonymous"
+      onerror="console.error('Error cargando drawing_utils.js')"
+      onload="console.log('drawing_utils.js cargado correctamente')"
+    ></script>
     <!-- Matter.js - Motor de física 2D avanzado -->
-    <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js" crossorigin="anonymous"></script>
   </head>
   <body>
     <header>
-      <h1>Laboratorio Gestual Interactivo · Lanzador de Física</h1>
+      <h1>Laboratorio Gestual Interactivo · Pizarra Viva</h1>
       <p>
-        Lanza objetos con gestos y destruye los objetivos. Usa el puño para agarrar, mueve para apuntar y suelta para lanzar. ¡Física realista en acción!
+        Dibuja en el aire con el dedo índice, borra con el puño y cambia de color con la mano abierta sobre la paleta. ¡Una pizarra digital que responde a tus gestos!
       </p>
     </header>
 
@@ -30,28 +46,113 @@
       </section>
 
       <section class="panel lab-panel">
-        <h2>Arena de Física</h2>
+        <h2>Pizarra Gestual</h2>
         <canvas id="lab-canvas" width="960" height="720"></canvas>
         <div class="lab-controls">
           <button id="reset-btn">Reiniciar juego</button>
+          <button id="debug-btn">Debug gestos: off</button>
         </div>
         <div class="status" id="lab-status">Estado: esperando interacción</div>
+        <pre id="debug-panel" class="debug-panel hidden">Debug desactivado</pre>
       </section>
 
       <section class="panel tutor-panel">
         <h2>Coach virtual</h2>
-        <p id="coach-message">¡Hola! Usa el gesto de pellizcar (pulgar e índice juntos) para activar la resortera, estírala para cargar fuerza y suelta para lanzar. ¡Destruye todos los objetivos!</p>
+        <p id="coach-message">¡Hola! Extiende el dedo índice para dibujar, haz puño para borrar y deja la mano abierta sobre la paleta para elegir color. Si mantienes la mano abierta en el centro por 2 s limpiarás toda la pizarra.</p>
         <ul>
-          <li><strong>Pellizco</strong> (pulgar + índice) → activar resortera</li>
-          <li>Estira el pellizco → aumenta la fuerza</li>
-          <li>Mueve el pellizco → cambia la dirección</li>
-          <li>Suelta el pellizco → lanzar objeto</li>
-          <li>O usa puño → agarrar y lanzar tradicional</li>
+          <li><strong>Índice</strong> extendido → dibujar trazos suaves</li>
+          <li><strong>Puño</strong> → goma suave para borrar zonas</li>
+          <li><strong>Mano abierta</strong> sobre la paleta → cambia el color activo</li>
+          <li><strong>Mano abierta</strong> al centro por 2 s → limpia la pizarra</li>
+          <li>El puntero sigue a tu palma suavizada</li>
         </ul>
       </section>
     </main>
 
-    <script type="module" src="./src/app.js"></script>
+    <!-- Esperar a que todos los scripts estén cargados antes de ejecutar el módulo -->
+    <script>
+      // Verificar que Camera esté disponible antes de cargar el módulo
+      function waitForScripts() {
+        return new Promise((resolve) => {
+          // Verificar si Camera está disponible (en diferentes formas)
+          const checkCamera = () => {
+            // Verificar múltiples formas en que Camera puede estar disponible
+            if (typeof Camera !== 'undefined') {
+              console.log('✅ Camera encontrado en scope global');
+              return true;
+            }
+            if (typeof window.Camera !== 'undefined') {
+              console.log('✅ Camera encontrado en window.Camera');
+              return true;
+            }
+            if (window.camera_utils && window.camera_utils.Camera) {
+              console.log('✅ Camera encontrado en window.camera_utils.Camera');
+              return true;
+            }
+            // Verificar si está en algún namespace de MediaPipe
+            if (window.MediaPipe && window.MediaPipe.Camera) {
+              console.log('✅ Camera encontrado en window.MediaPipe.Camera');
+              return true;
+            }
+            return false;
+          };
+          
+          if (checkCamera()) {
+            console.log('Camera está disponible, cargando módulo...');
+            resolve();
+          } else {
+            console.log('Camera no disponible inicialmente, esperando...');
+            // Esperar a que se carguen los scripts
+            let attempts = 0;
+            const checkInterval = setInterval(() => {
+              attempts++;
+              if (checkCamera()) {
+                console.log('Camera está disponible después de esperar, cargando módulo...');
+                clearInterval(checkInterval);
+                resolve();
+              } else if (attempts % 10 === 0) {
+                console.log(`⏳ Esperando Camera... (intento ${attempts}/100)`);
+                console.log('  - window.Camera:', typeof window.Camera);
+                console.log('  - Camera:', typeof Camera);
+                console.log('  - window.camera_utils:', window.camera_utils);
+                // Listar todas las propiedades de window que contengan "camera"
+                const cameraProps = Object.keys(window).filter(k => k.toLowerCase().includes('camera'));
+                if (cameraProps.length > 0) {
+                  console.log('  - Propiedades relacionadas con camera:', cameraProps);
+                }
+              } else if (attempts > 100) {
+                // Timeout después de 10 segundos
+                console.error('❌ Camera no está disponible después de esperar');
+                console.log('Scripts cargados:', Array.from(document.scripts).map(s => s.src));
+                console.log('Todas las propiedades de window que contienen "camera":', 
+                  Object.keys(window).filter(k => k.toLowerCase().includes('camera')));
+                clearInterval(checkInterval);
+                resolve(); // Continuar de todas formas para ver el error
+              }
+            }, 100);
+          }
+        });
+      }
+
+      // Esperar a que el DOM esté listo y los scripts cargados
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', async () => {
+          await waitForScripts();
+          const script = document.createElement('script');
+          script.type = 'module';
+          script.src = './src/app.js';
+          document.body.appendChild(script);
+        });
+      } else {
+        // DOM ya está listo
+        waitForScripts().then(() => {
+          const script = document.createElement('script');
+          script.type = 'module';
+          script.src = './src/app.js';
+          document.body.appendChild(script);
+        });
+      }
+    </script>
   </body>
 </html>
 

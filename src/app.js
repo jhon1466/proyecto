@@ -1,5 +1,5 @@
 import { GestureStateMachine } from "./stateMachine.js";
-import { LabScene } from "./scene.js";
+import { LabScene } from "./sceneWhiteboard.js";
 import {
   FilesetResolver,
   GestureRecognizer,
@@ -13,6 +13,8 @@ const coachEl = document.getElementById("coach-message");
 const labCanvas = document.getElementById("lab-canvas");
 const handsOverlay = document.getElementById("hands-overlay");
 const resetBtn = document.getElementById("reset-btn");
+const debugBtn = document.getElementById("debug-btn");
+const debugPanel = document.getElementById("debug-panel");
 
 const scene = new LabScene(labCanvas, statusEl, coachEl);
 
@@ -31,7 +33,7 @@ const gestures = {
 const gestureLatches = {
   openHand: createLatch(4, 5), // Menos frames para más responsividad
   fist: createLatch(4, 5),
-  pointer: createLatch(4, 5),
+  pointer: createLatch(3, 4), // Detección más rápida para el índice
   pinch: createLatch(3, 4), // Más responsivo para pellizco
 };
 
@@ -51,6 +53,24 @@ const gestureHistory = {
   pinch: [],
   maxHistory: 10, // Mantener últimos 10 frames
 };
+
+const debugInfo = {
+  pointerScore: 0,
+  fistScore: 0,
+  openScore: 0,
+  pointerConsistency: 0,
+  isPointerGeometric: false,
+  isPinch: false,
+  indexDistance: null,
+  pinchDistance: null,
+  pointerAngle: 0,
+  palmX: null,
+  palmY: null,
+  handPresent: false,
+  calibrated: false,
+  calibrationSamples: 0,
+};
+let debugEnabled = false;
 
 const gestureLabels = {
   openHand: "mano abierta",
@@ -74,12 +94,13 @@ let currentHandLandmarks = null;
 let overlayCtx = null;
 
 // Optimización de rendimiento: throttling para dibujado
+// Con GPU, podemos procesar más frames para mejor precisión
 let lastOverlayDraw = 0;
 const OVERLAY_DRAW_INTERVAL = 16; // ~60fps para overlay
 let lastGestureProcess = 0;
-const GESTURE_PROCESS_INTERVAL = 33; // ~30fps para procesamiento de gestos
+const GESTURE_PROCESS_INTERVAL = 16; // ~60fps para procesamiento de gestos (mejorado con GPU)
 let lastGestureFrame = 0;
-const GESTURE_FRAME_INTERVAL = 33; // ~30fps para reconocimiento de gestos
+const GESTURE_FRAME_INTERVAL = 16; // ~60fps para reconocimiento de gestos (mejorado con GPU)
 
 const filesetResolverPromise = FilesetResolver.forVisionTasks(
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm"
@@ -87,39 +108,45 @@ const filesetResolverPromise = FilesetResolver.forVisionTasks(
 
 const stateMachine = new GestureStateMachine((action, payload = {}) => {
   switch (action) {
-    case "select":
-      return scene.selectNearest(payload.palm);
-    case "drag":
-      scene.dragSelected(payload.palm);
+    case "startDrawing":
+      scene.startDrawing(payload.palm);
       break;
-    case "drop":
-      scene.dropSelected();
+    case "continueDrawing":
+      scene.continueDrawing(payload.palm);
       break;
-    case "rotateStart":
-      return scene.getSelectedAngle();
-    case "getCurrentAngle":
-      return scene.getSelectedAngle();
-    case "rotate":
-      scene.rotateSelected(payload.angle ?? 0, payload.deltaAngle);
+    case "endDrawing":
+      scene.endDrawing();
       break;
-    case "rotateEnd":
+    case "startErasing":
+      scene.startErasing(payload.palm);
       break;
-    case "adjustTrajectory":
-      scene.adjustTrajectory(payload.angle, payload.indexDistance, payload.palm);
+    case "continueErasing":
+      scene.continueErasing(payload.palm);
       break;
-    case "startSlingshot":
-      return scene.startSlingshot(payload.pinchPosition, payload.pinchDistance, payload.angle);
+    case "endErasing":
+      scene.endErasing();
       break;
-    case "updateSlingshot":
-      scene.updateSlingshot(payload.pinchPosition, payload.pinchDistance, payload.angle);
+    case "attemptColorPick":
+      scene.attemptColorPick(payload.palm);
       break;
-    case "releaseSlingshot":
-      scene.releaseSlingshot();
+    case "clearBoard":
+      scene.clearBoard();
       break;
+    case "isPointerInPalette":
+      return scene.isPointerInPalette(payload.palm);
     default:
       break;
   }
 });
+
+if (debugBtn && debugPanel) {
+  debugBtn.addEventListener("click", () => {
+    debugEnabled = !debugEnabled;
+    debugBtn.textContent = `Debug gestos: ${debugEnabled ? "on" : "off"}`;
+    debugPanel.classList.toggle("hidden", !debugEnabled);
+    renderDebugPanel();
+  });
+}
 
 const palm = { x: 0, y: 0 };
 const palmFilter = { 
@@ -165,6 +192,47 @@ function updateGestureDisplay() {
     .join(", ");
   gestureEl.textContent = `Gestos: ${active || "—"}`;
 }
+
+function renderDebugPanel() {
+  if (!debugEnabled || !debugPanel) return;
+
+  const lines = [
+    `Mano detectada: ${debugInfo.handPresent ? "✅" : "—"}`,
+    `Puntero activo: ${gestures.pointer ? "✅" : "—"} (geom: ${
+      debugInfo.isPointerGeometric ? "✅" : "—"
+    })`,
+    `Puntajes → pointer: ${debugInfo.pointerScore.toFixed(
+      2
+    )} | puño: ${debugInfo.fistScore.toFixed(2)} | mano abierta: ${debugInfo.openScore.toFixed(2)}`,
+    `Consistencia puntero: ${(debugInfo.pointerConsistency * 100).toFixed(0)}%`,
+    `Ángulo puntero: ${Math.round(debugInfo.pointerAngle)}°`,
+    `Distancia índice: ${
+      debugInfo.indexDistance !== null
+        ? debugInfo.indexDistance.toFixed(3)
+        : "—"
+    }`,
+    `Pellizco detectado: ${debugInfo.isPinch ? "✅" : "—"} ${
+      debugInfo.pinchDistance
+        ? `(distancia ${debugInfo.pinchDistance.toFixed(3)})`
+        : ""
+    }`,
+    `Palma (canvas): ${
+      debugInfo.palmX !== null
+        ? `${Math.round(debugInfo.palmX)}, ${Math.round(debugInfo.palmY)}`
+        : "—"
+    }`,
+    `Calibración: ${
+      debugInfo.calibrated
+        ? "✅"
+        : `En progreso (${debugInfo.calibrationSamples}/${
+            calibration.maxSamples
+          })`
+    }`,
+  ];
+
+  debugPanel.textContent = lines.join("\n");
+}
+
 
 function createLatch(onFrames, offFrames) {
   return {
@@ -323,14 +391,13 @@ function smoothPalmCoords(x, y) {
     
     // Si el movimiento es menor que el umbral, ignorarlo (reduce temblor)
     if (distance < MIN_MOVEMENT_THRESHOLD) {
-      // No actualizar si el movimiento es muy pequeño
-      // Aplicar un suavizado muy agresivo para mantener la posición estable
-      const alpha = 0.05; // Muy bajo para mantener quieto
+      // Movimiento pequeño: mantener algo de suavizado pero sin pegarse
+      const alpha = 0.15;
       palmFilter.x = lerp(palmFilter.x, medianX, alpha);
       palmFilter.y = lerp(palmFilter.y, medianY, alpha);
     } else {
-      // Movimiento significativo: suavizado normal pero más agresivo
-      const alpha = 0.15; // Más bajo que antes (0.3) para más estabilidad
+      // Movimiento claro: seguir la mano casi en tiempo real pero con control
+      const alpha = 0.3;
       palmFilter.x = lerp(palmFilter.x, medianX, alpha);
       palmFilter.y = lerp(palmFilter.y, medianY, alpha);
     }
@@ -432,6 +499,8 @@ function handleGestureResult(result) {
     gestures.handPresent = false;
     palmFilter.ready = false;
     currentHandLandmarks = null;
+    debugInfo.handPresent = false;
+    renderDebugPanel();
     return;
   }
 
@@ -443,8 +512,13 @@ function handleGestureResult(result) {
     // Pasar coordenadas normalizadas (0-1) directamente
     smoothPalmCoords(wrist.x, wrist.y);
     gestures.handPresent = true;
+    debugInfo.handPresent = true;
+    debugInfo.palmX = palm.x;
+    debugInfo.palmY = palm.y;
   } else {
     gestures.handPresent = false;
+    debugInfo.handPresent = false;
+    renderDebugPanel();
     return;
   }
 
@@ -452,6 +526,9 @@ function handleGestureResult(result) {
   const openScore = getGestureScore(categories, gestureCategoryMap.openHand);
   const fistScore = getGestureScore(categories, gestureCategoryMap.fist);
   const pointerScore = getGestureScore(categories, gestureCategoryMap.pointer);
+  debugInfo.openScore = openScore;
+  debugInfo.fistScore = fistScore;
+  debugInfo.pointerScore = pointerScore;
 
   // Detección mejorada de puntero usando geometría de la mano
   let isPointerGeometric = false;
@@ -522,8 +599,10 @@ function handleGestureResult(result) {
         
         // Guardar distancia del índice para calcular fuerza
         gestures.indexDistance = distIndexTip;
+        debugInfo.indexDistance = distIndexTip;
       } else {
         gestures.indexDistance = null;
+        debugInfo.indexDistance = null;
       }
     }
     
@@ -689,7 +768,12 @@ function handleGestureResult(result) {
   
   // Combinar detección de MediaPipe con validación geométrica
   // Priorizar geometría cuando sea clara, usar MediaPipe como respaldo
-  const isPointer = !isPinch && (pointerScore > 0.35 || (isPointerGeometric && pointerScore > 0.2)) && !isFistGeometric && !isOpenHandGeometric;
+  const isPointer =
+    !isPinch &&
+    (isPointerGeometric || pointerScore > 0.25) &&
+    !isFistGeometric &&
+    !isOpenHandGeometric;
+  debugInfo.isPointerGeometric = isPointerGeometric;
   
   // Combinar detecciones: geometría tiene más peso
   const finalFist = (isFistGeometric || fistScore > 0.6) && !isPointer && !isPinch;
@@ -704,7 +788,15 @@ function handleGestureResult(result) {
   // Usar historial para validación temporal (requiere consistencia)
   const fistConsistent = getGestureConsistency("fist");
   const openHandConsistent = getGestureConsistency("openHand");
-  const pointerConsistent = getGestureConsistency("pointer");
+  const pointerConsistent = getGestureConsistency("pointer", 0.55);
+  if (gestureHistory.pointer.length) {
+    const recentLength = Math.min(gestureHistory.pointer.length, 5);
+    const recent = gestureHistory.pointer.slice(-recentLength);
+    debugInfo.pointerConsistency =
+      recent.reduce((a, b) => a + b, 0) / recentLength;
+  } else {
+    debugInfo.pointerConsistency = 0;
+  }
   const pinchConsistent = getGestureConsistency("pinch");
   
   setLatchedGesture("openHand", openHandConsistent);
@@ -716,6 +808,12 @@ function handleGestureResult(result) {
   gestures.angle = pointerAngle;
   gestures.pinchPosition = pinchPos;
   gestures.pinchDistance = pinchDist;
+  debugInfo.pointerAngle = pointerAngle;
+  debugInfo.isPinch = isPinch;
+  debugInfo.pinchDistance = pinchDist;
+  debugInfo.calibrated = calibration.calibrated;
+  debugInfo.calibrationSamples = calibration.samples.length;
+  renderDebugPanel();
 }
 
 function processGestureFrame(timestampMs) {
@@ -1139,27 +1237,50 @@ function loop(timestamp) {
 requestAnimationFrame(loop);
 
 async function initGestureRecognizer(filesetResolver) {
+  // Verificar si WebGL está disponible para GPU
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+  const hasWebGL = !!gl;
+  
+  if (hasWebGL) {
+    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+    if (debugInfo) {
+      const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+      console.log('WebGL Renderer:', renderer);
+      const isNVIDIA = renderer.includes('NVIDIA') || renderer.includes('GeForce') || renderer.includes('RTX');
+      if (isNVIDIA) {
+        console.log('✅ GPU NVIDIA detectada - WebGL acelerado disponible');
+      } else {
+        console.log('⚠️ GPU no NVIDIA detectada - WebGL puede ser más lento');
+      }
+    }
+  } else {
+    console.warn('⚠️ WebGL no disponible - solo CPU disponible');
+  }
+
   try {
-    // Intentar con GPU primero (más rápido)
+    // Intentar con GPU primero (WebGL) - mejor precisión y rendimiento
+    // Usar umbrales más altos para mejor precisión cuando hay GPU
     gestureRecognizer = await GestureRecognizer.createFromOptions(
       filesetResolver,
       {
         baseOptions: {
           modelAssetPath:
             "https://storage.googleapis.com/mediapipe-tasks/gesture_recognizer/gesture_recognizer.task",
-          delegate: "GPU",
+          delegate: "GPU", // WebGL en el navegador
         },
         runningMode: "VIDEO",
         numHands: 1,
-        minHandDetectionConfidence: 0.3, // Más bajo para detectar más fácilmente
-        minHandPresenceConfidence: 0.3,
-        minTrackingConfidence: 0.3,
+        // Umbrales optimizados para GPU: más altos = menos falsos positivos, más precisión
+        minHandDetectionConfidence: 0.5, // Aumentado de 0.3 para mejor precisión
+        minHandPresenceConfidence: 0.5,  // Aumentado de 0.3 para mejor precisión
+        minTrackingConfidence: 0.5,      // Aumentado de 0.3 para mejor precisión
       }
     );
-    console.log("Gesture Recognizer inicializado con GPU");
+    console.log("✅ Gesture Recognizer inicializado con GPU (WebGL) - Alta precisión");
   } catch (gpuError) {
     // Fallback a CPU si GPU no está disponible
-    console.log("GPU no disponible, usando CPU:", gpuError);
+    console.warn("⚠️ GPU no disponible, usando CPU (menor precisión):", gpuError);
     gestureRecognizer = await GestureRecognizer.createFromOptions(
       filesetResolver,
       {
@@ -1170,6 +1291,7 @@ async function initGestureRecognizer(filesetResolver) {
         },
         runningMode: "VIDEO",
         numHands: 1,
+        // En CPU, usar umbrales más bajos para compensar menor rendimiento
         minHandDetectionConfidence: 0.4,
         minHandPresenceConfidence: 0.4,
         minTrackingConfidence: 0.4,
@@ -1180,51 +1302,147 @@ async function initGestureRecognizer(filesetResolver) {
   gestureModelReady = true;
   
   // Inicializar HandLandmarker para validación geométrica adicional
+  // Este modelo es más preciso para landmarks
   try {
     handLandmarker = await HandLandmarker.createFromOptions(
       filesetResolver,
       {
         baseOptions: {
+          // Usar modelo float16 para mejor rendimiento en GPU
           modelAssetPath:
             "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-          delegate: "GPU",
+          delegate: "GPU", // WebGL en el navegador
         },
         runningMode: "VIDEO",
         numHands: 1,
-        minHandDetectionConfidence: 0.4,
-        minHandPresenceConfidence: 0.4,
-        minTrackingConfidence: 0.4,
+        // Umbrales optimizados para mejor precisión
+        minHandDetectionConfidence: 0.5,  // Aumentado para mejor precisión
+        minHandPresenceConfidence: 0.5,   // Aumentado para mejor precisión
+        minTrackingConfidence: 0.5,       // Aumentado para mejor precisión
       }
     );
     handLandmarkerReady = true;
-    console.log("Hand Landmarker inicializado");
+    console.log("✅ Hand Landmarker inicializado con GPU (WebGL) - Alta precisión");
   } catch (error) {
-    console.log("Hand Landmarker no disponible, usando solo Gesture Recognizer:", error);
-    handLandmarkerReady = false;
+    console.warn("⚠️ Hand Landmarker no disponible con GPU, intentando CPU:", error);
+    try {
+      // Fallback a CPU para HandLandmarker
+      handLandmarker = await HandLandmarker.createFromOptions(
+        filesetResolver,
+        {
+          baseOptions: {
+            modelAssetPath:
+              "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+            delegate: "CPU",
+          },
+          runningMode: "VIDEO",
+          numHands: 1,
+          minHandDetectionConfidence: 0.4,
+          minHandPresenceConfidence: 0.4,
+          minTrackingConfidence: 0.4,
+        }
+      );
+      handLandmarkerReady = true;
+      console.log("Hand Landmarker inicializado con CPU");
+    } catch (cpuError) {
+      console.warn("Hand Landmarker no disponible, usando solo Gesture Recognizer:", cpuError);
+      handLandmarkerReady = false;
+    }
+  }
+}
+
+// Implementación alternativa de Camera si no está disponible
+class SimpleCamera {
+  constructor(videoElement, options) {
+    this.video = videoElement;
+    this.onFrame = options.onFrame;
+    this.width = options.width || 640;
+    this.height = options.height || 480;
+    this.isRunning = false;
+    this.animationFrameId = null;
+  }
+
+  start() {
+    if (this.isRunning) return;
+    this.isRunning = true;
+    this.processFrame();
+  }
+
+  stop() {
+    this.isRunning = false;
+    if (this.animationFrameId) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+  }
+
+  processFrame() {
+    if (!this.isRunning) return;
+    
+    if (this.video.readyState >= 2) { // HAVE_CURRENT_DATA
+      if (this.onFrame) {
+        this.onFrame();
+      }
+    }
+    
+    this.animationFrameId = requestAnimationFrame(() => this.processFrame());
   }
 }
 
 async function initCamera() {
-  // Mayor resolución para mejor detección
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { 
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
-      facingMode: 'user'
-    },
-  });
-  videoEl.srcObject = stream;
-  await videoEl.play();
+  try {
+    // Verificar que Camera esté disponible (en diferentes formas)
+    let CameraClass = null;
+    
+    if (typeof Camera !== 'undefined') {
+      CameraClass = Camera;
+      console.log('Usando Camera de MediaPipe');
+    } else if (typeof window.Camera !== 'undefined') {
+      CameraClass = window.Camera;
+      console.log('Usando window.Camera');
+    } else if (window.camera_utils && window.camera_utils.Camera) {
+      CameraClass = window.camera_utils.Camera;
+      console.log('Usando window.camera_utils.Camera');
+    } else {
+      console.warn('Camera de MediaPipe no disponible, usando implementación alternativa');
+      CameraClass = SimpleCamera;
+    }
 
-  const camera = new Camera(videoEl, {
-    onFrame: () => {
-      const timestamp = performance.now();
-      processGestureFrame(timestamp);
-    },
-    width: 1280,
-    height: 720,
-  });
-  camera.start();
+    // Verificar que el elemento de video exista
+    if (!videoEl) {
+      throw new Error('Elemento de video no encontrado');
+    }
+
+    // Solicitar acceso a la cámara
+    statusEl.textContent = 'Solicitando acceso a la cámara...';
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { 
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        facingMode: 'user'
+      },
+    });
+    
+    videoEl.srcObject = stream;
+    await videoEl.play();
+    
+    statusEl.textContent = 'Cámara iniciada. Calibrando...';
+
+    const camera = new CameraClass(videoEl, {
+      onFrame: () => {
+        const timestamp = performance.now();
+        processGestureFrame(timestamp);
+      },
+      width: 1280,
+      height: 720,
+    });
+    
+    camera.start();
+    console.log('Cámara iniciada correctamente');
+  } catch (error) {
+    console.error('Error al inicializar la cámara:', error);
+    throw error; // Re-lanzar para que bootstrap lo capture
+  }
 }
 
 // Detectar y mostrar información de GPU
@@ -1259,20 +1477,75 @@ function detectGPU() {
   return null;
 }
 
+// Esperar a que Camera esté disponible
+function waitForCamera(maxAttempts = 50, interval = 100) {
+  return new Promise((resolve, reject) => {
+    let attempts = 0;
+    const checkCamera = () => {
+      // Verificar diferentes formas en que Camera puede estar disponible
+      const cameraAvailable = 
+        typeof Camera !== 'undefined' ||
+        typeof window.Camera !== 'undefined' ||
+        (window.camera_utils && window.camera_utils.Camera);
+      
+      if (cameraAvailable) {
+        console.log('Camera está disponible');
+        resolve();
+      } else if (attempts < maxAttempts) {
+        attempts++;
+        if (attempts % 10 === 0) {
+          console.log(`Esperando Camera... (intento ${attempts}/${maxAttempts})`);
+          // Diagnosticar qué está disponible
+          console.log('window.Camera:', typeof window.Camera);
+          console.log('Camera:', typeof Camera);
+          console.log('window.camera_utils:', window.camera_utils);
+        }
+        setTimeout(checkCamera, interval);
+      } else {
+        console.error('Camera no disponible. Verificando scripts cargados...');
+        console.log('Scripts en el documento:', Array.from(document.scripts).map(s => s.src));
+        reject(new Error('Camera no está disponible después de esperar. Verifica que camera_utils.js se haya cargado correctamente desde el CDN.'));
+      }
+    };
+    checkCamera();
+  });
+}
+
 async function bootstrap() {
   try {
+    // Verificar que los elementos del DOM estén disponibles
+    if (!videoEl || !statusEl || !labCanvas) {
+      throw new Error('Elementos del DOM no encontrados. Asegúrate de que el HTML se haya cargado correctamente.');
+    }
+
+    // Esperar a que Camera esté disponible
+    statusEl.textContent = 'Esperando a que Camera esté disponible...';
+    await waitForCamera();
+
     // Detectar GPU antes de inicializar
     const gpuInfo = detectGPU();
     if (gpuInfo && !gpuInfo.isNVIDIA) {
       statusEl.textContent = '⚠️ Verifica que el navegador esté usando la GPU dedicada (RTX 4060). Revisa la consola para más información.';
     }
     
+    statusEl.textContent = 'Inicializando overlay...';
     initOverlayCanvas();
+    
+    statusEl.textContent = 'Cargando modelos de MediaPipe...';
     const filesetResolver = await filesetResolverPromise;
     await initGestureRecognizer(filesetResolver);
+    
+    statusEl.textContent = 'Iniciando cámara...';
     await initCamera();
+    
+    statusEl.textContent = '¡Listo! Mueve la mano por toda la pantalla para calibrar...';
   } catch (err) {
-    statusEl.textContent = `No se pudo iniciar la cámara: ${err.message}`;
+    console.error('Error en bootstrap:', err);
+    const errorMessage = err.message || 'Error desconocido';
+    if (statusEl) {
+      statusEl.textContent = `❌ Error: ${errorMessage}. Revisa la consola para más detalles.`;
+    }
+    alert(`Error al inicializar la aplicación: ${errorMessage}\n\nPor favor:\n1. Asegúrate de permitir el acceso a la cámara\n2. Verifica que estés usando HTTPS o localhost\n3. Revisa la consola del navegador para más detalles`);
   }
 }
 
