@@ -23,10 +23,3 @@ Prototipo educativo que usa gestos de manos para crear y manipular contenido vis
 2. Instala dependencias opcionales de desarrollo: `npm install -D live-server`.
 3. Levanta un servidor estático (ej. `npx live-server`).
 4. Abre `http://127.0.0.1:8080`, concede acceso a la cámara y asegúrate de tener internet para descargar `gesture_recognizer.task`.
-
-### Próximos pasos sugeridos
-- Guardar las creaciones como imágenes o trazos exportables.
-- Añadir herramientas extra (formas básicas, resaltador, sellos).
-- Permitir sesiones colaborativas con múltiples usuarios.
-- Guardar métricas por sesión y generar reportes PDF para las presentaciones.
-
